@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Connect Wallet → Link Social Account (SIWE)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.9.2/dist/ethers.min.js"></script>
+  <style>
+    body { font-family: system-ui, Arial; padding: 24px; max-width: 700px; margin: auto; }
+    button { padding: 10px 16px; margin: 8px 0; }
+    input { padding: 8px; width: 100%; box-sizing: border-box; margin-bottom: 8px; }
+    pre { background:#f6f6f6; padding:12px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h1>Connect wallet & link social account</h1>
+
+  <label>Social provider (e.g. twitter, github)</label>
+  <input id="socialProvider" placeholder="twitter" value="twitter" />
+
+  <label>Social account id (username or id)</label>
+  <input id="socialId" placeholder="@alice or alice123" value="@alice" />
+
+  <div>
+    <button id="connectBtn">Connect Wallet (MetaMask)</button>
+  </div>
+
+  <div>
+    <button id="linkBtn" disabled>Sign & Link</button>
+  </div>
+
+  <h3>Result</h3>
+  <pre id="result">not connected</pre>
+
+<script>
+const connectBtn = document.getElementById('connectBtn');
+const linkBtn = document.getElementById('linkBtn');
+const result = document.getElementById('result');
+
+let provider;    // ethers provider
+let signer;      // ethers signer
+let address;     // wallet address
+
+async function detectProvider() {
+  if (window.ethereum) {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    return true;
+  }
+  return false;
+}
+
+connectBtn.addEventListener('click', async () => {
+  try {
+    const ok = await detectProvider();
+    if (!ok) {
+      result.textContent = 'MetaMask (window.ethereum) not found. Install MetaMask or use a web3 browser.';
+      return;
+    }
+    // Request accounts
+    await window.ethereum.request({ method: 'eth_requestAccounts' });
+    signer = await provider.getSigner();
+    address = await signer.getAddress();
+    result.textContent = `Connected: ${address}`;
+    linkBtn.disabled = false;
+  } catch (err) {
+    console.error(err);
+    result.textContent = 'Error connecting: ' + (err.message || err);
+  }
+});
+
+linkBtn.addEventListener('click', async () => {
+  try {
+    if (!signer || !address) throw new Error('Wallet not connected.');
+    const socialProvider = document.getElementById('socialProvider').value.trim();
+    const socialId = document.getElementById('socialId').value.trim();
+    if (!socialProvider || !socialId) throw new Error('Provide social provider and social id.');
+
+    // Build a SIWE message manually (simple version)
+    const domain = window.location.host;
+    const origin = window.location.origin;
+    // Note: In production include nonce from server and timestamped 'issuedAt'
+    const issuedAt = new Date().toISOString();
+    const statement = `Link my wallet to social account ${socialProvider}:${socialId}`;
+    const siweMessage = [
+      `${address} wants to sign in to ${domain}`,
+      '',
+      statement,
+      '',
+      `URI: ${origin}`,
+      `Version: 1`,
+      `Chain ID: 1`,
+      `Nonce: ${Math.random().toString(36).substring(2, 10)}`,
+      `Issued At: ${issuedAt}`,
+    ].join('\n');
+
+    // Sign the message
+    const signature = await signer.signMessage(siweMessage);
+
+    // POST to backend for verification & linking
+    const resp = await fetch('/verify', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: siweMessage,
+        signature,
+        socialProvider,
+        socialId
+      })
+    });
+
+    const body = await resp.json();
+    if (!resp.ok) {
+      result.textContent = `Server error: ${body.error || resp.statusText}`;
+    } else {
+      result.textContent = `Success: linked ${address} → ${socialProvider}:${socialId}\n\nServer response:\n${JSON.stringify(body, null, 2)}`;
+    }
+
+  } catch (err) {
+    console.error(err);
+    result.textContent = 'Error: ' + (err.message || err);
+  }
+});
+</script>
+</body>
+</html>
